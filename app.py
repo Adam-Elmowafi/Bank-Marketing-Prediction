@@ -301,58 +301,101 @@ def show_overview(df_original: pd.DataFrame, num_features: int) -> None:
 def show_prediction_tab(user_inputs, models_dict, feature_names) -> None:
     """Show prediction interface and results."""
     st.header("🎯 Predict Subscription Likelihood")
-    
+
     col1, col2 = st.columns(2)
+
     with col1:
         model_choice = st.radio(
             "🤖 Select Model:",
             ("SVM (Best Performance)", "Logistic Regression"),
             index=0
         )
-        selected_model = models_dict['svm'] if model_choice == "SVM (Best Performance)" else models_dict['lr']
-        model_name = "SVM" if model_choice == "SVM (Best Performance)" else "Logistic Regression"
-    
+
+        selected_model = (
+            models_dict["svm"]
+            if model_choice == "SVM (Best Performance)"
+            else models_dict["lr"]
+        )
+
+        model_name = (
+            "SVM"
+            if model_choice == "SVM (Best Performance)"
+            else "Logistic Regression"
+        )
+
     with col2:
-        if st.button("🔮 Predict Subscription", use_container_width=True, key="predict_btn"):
-            result = predict_deposit(user_inputs, selected_model, models_dict['scaler'], feature_names, model_name)
+        if st.button(
+            "🔮 Predict Subscription",
+            use_container_width=True,
+            key="predict_btn"
+        ):
+            result = predict_deposit(
+                user_inputs,
+                selected_model,
+                models_dict["scaler"],
+                feature_names,
+                model_name
+            )
             st.session_state.prediction_result = result
-    
+
     if "prediction_result" in st.session_state:
         result = st.session_state.prediction_result
         probability = result["probability"]
-        
+
         left, right = st.columns(2)
-        
+
         with left:
             if result["prediction"] == 1:
-                st.success("✅ **LIKELY TO SUBSCRIBE**", icon="✓")
+                st.success(
+                    "✅ **LIKELY TO SUBSCRIBE**",
+                    icon="✅"
+                )
             else:
-                st.warning("❌ **UNLIKELY TO SUBSCRIBE**", icon="✗")
-            
-            st.metric("Subscription Probability", f"{probability:.2%}", 
-                      delta=f"{probability-THRESHOLD:.2%}" if probability > THRESHOLD else "")
-            st.caption(f"Decision Rule: Probability ≥ {THRESHOLD:.0%} → Subscribe")
-        
+                st.warning(
+                    "❌ **UNLIKELY TO SUBSCRIBE**",
+                    icon="⚠️"
+                )
+
+            st.metric(
+                "Subscription Probability",
+                f"{probability:.2%}",
+                delta=(
+                    f"{probability - THRESHOLD:.2%}"
+                    if probability > THRESHOLD
+                    else ""
+                )
+            )
+
+            st.caption(
+                f"Decision Rule: Probability ≥ {THRESHOLD:.0%} → Subscribe"
+            )
+
         with right:
             # Gauge chart
-            fig = go.Figure(go.Indicator(
-                mode="gauge+number",
-                value=probability * 100,
-                number={"suffix": "%", "font": {"size": 28}},
-                title={"text": "Subscription Probability", "font": {"size": 16}},
-                gauge={
-                    "axis": {"range": [0, 100]},
-                    "bar": {"color": "#7928ca"},
-                    "threshold": {
-                        "line": {"color": "#ff4b4b", "width": 4},
-                        "value": THRESHOLD * 100
+            fig = go.Figure(
+                go.Indicator(
+                    mode="gauge+number",
+                    value=probability * 100,
+                    number={"suffix": "%", "font": {"size": 28}},
+                    title={
+                        "text": "Subscription Probability",
+                        "font": {"size": 16}
                     },
-                    "steps": [
-                        {"range": [0, 50], "color": "#f0f0f0"},
-                        {"range": [50, 100], "color": "#e0e0e0"}
-                    ]
-                },
-            ))
+                    gauge={
+                        "axis": {"range": [0, 100]},
+                        "bar": {"color": "#7928ca"},
+                        "threshold": {
+                            "line": {"color": "#ff4b4b", "width": 4},
+                            "value": THRESHOLD * 100
+                        },
+                        "steps": [
+                            {"range": [0, 50], "color": "#f0f0f0"},
+                            {"range": [50, 100], "color": "#e0e0e0"}
+                        ]
+                    }
+                )
+            )
+
             fig.update_layout(
                 template="plotly_dark",
                 height=300,
@@ -360,7 +403,11 @@ def show_prediction_tab(user_inputs, models_dict, feature_names) -> None:
                 paper_bgcolor="#161b22",
                 font=dict(color="#c9d1d9")
             )
-            st.plotly_chart(fig, use_container_width=True)
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
 
 
 def show_analytics_tab(df_original: pd.DataFrame) -> None:

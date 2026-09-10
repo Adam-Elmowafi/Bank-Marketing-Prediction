@@ -156,8 +156,8 @@ def preprocess_data(df: pd.DataFrame):
 
 @st.cache_resource
 def train_models(X_train, X_test, y_train, y_test, _scaler):
-    """Train Logistic Regression and SVM models."""
-    # Transform data
+    """Train Logistic Regression and SVM models with a properly fitted scaler."""
+    # Fit the scaler explicitly on training data
     X_train_scaled = _scaler.fit_transform(X_train)
     X_test_scaled = _scaler.transform(X_test)
     
@@ -172,13 +172,12 @@ def train_models(X_train, X_test, y_train, y_test, _scaler):
     return {
         'lr': lr_model,
         'svm': svm_model,
-        'scaler': _scaler,
+        'scaler': _scaler,  # إرجاع الـ scaler بعد عمل fit_transform عليه
         'X_train_scaled': X_train_scaled,
         'X_test_scaled': X_test_scaled,
         'y_train': y_train,
         'y_test': y_test
     }
-
 
 # ============================================================================
 # Prediction & Evaluation
@@ -540,12 +539,13 @@ def main() -> None:
         X, y, test_size=0.2, random_state=42, stratify=y
     )
     
-    # Scale and train models
+    # Initialize and train with scaler
     scaler = StandardScaler()
     models_dict = train_models(X_train, X_test, y_train, y_test, scaler)
-    models_dict['scaler'] = scaler
     
     feature_names = X.columns.tolist()
+    
+    # Build UI & Tabs...
     
     # Build UI
     user_inputs = build_sidebar()

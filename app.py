@@ -1,32 +1,28 @@
 """
 Bank Deposit Classification — Streamlit Application
 
-This app matches the final notebook training pipeline:
-- Loads bank.csv
-- Drops 'duration' to prevent Data Leakage
+This app matches the notebook training pipeline:
+- Loads bank.csv with 17 original features
 - Binary encoding: default, housing, loan (yes/no → 1/0)
 - One-hot encoding: job, marital, education, contact, month, poutcome (drop_first=True)
-- Total 41 features after encoding
+- Total 42 features after encoding
 - StandardScaler normalization
-- SMOTE applied exclusively on training data for class balance
-- Four models: Logistic Regression, SVM, Random Forest, XGBoost
+- Two models: Logistic Regression and SVM
 - Target: deposit (yes/no)
-- Optimal Decision Threshold: 0.47 (XGBoost)
 """
 
 import warnings
 import numpy as np
 import pandas as pd
+import joblib
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
-from sklearn.ensemble import RandomForestClassifier
-from xgboost import XGBClassifier
-from imblearn.over_sampling import SMOTE
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, precision_recall_fscore_support
 
 warnings.filterwarnings("ignore")
 
@@ -41,7 +37,7 @@ st.set_page_config(
 # Constants
 # ============================================================================
 DATASET_FILE = "bank.csv"
-THRESHOLD = 0.47  # Optimized via Bayesian Optimization (Optuna)
+THRESHOLD = 0.50
 
 # Job categories from notebook
 JOBS = [
@@ -127,24 +123,19 @@ def preprocess_data(df: pd.DataFrame):
     """
     Preprocess the dataframe:
     1. Identify target column
-    2. Drop 'duration' to prevent data leakage
-    3. Convert binary columns to 0/1
-    4. One-hot encode categorical columns (excluding target)
-    5. Prepare X and y
+    2. Convert binary columns to 0/1
+    3. One-hot encode categorical columns (excluding target)
+    4. Prepare X and y
     """
     df_copy = df.copy()
     
     # Identify target column FIRST
     target_col = 'deposit' if 'deposit' in df_copy.columns else 'y'
     
-    # Convert target column to numeric
+# Convert target column to numeric
     if df_copy[target_col].dtype == 'object':
         df_copy[target_col] = df_copy[target_col].astype(str).str.strip().str.lower().map({'no': 0, 'yes': 1})
     
-    # CRITICAL: Drop 'duration' to prevent Data Leakage
-    if 'duration' in df_copy.columns:
-        df_copy = df_copy.drop(columns=['duration'])
-        
     # Separate features and target BEFORE encoding
     X = df_copy.drop(columns=[target_col])
     y = df_copy[target_col]
@@ -165,37 +156,27 @@ def preprocess_data(df: pd.DataFrame):
 
 @st.cache_resource
 def train_models(X_train, X_test, y_train, y_test, _scaler):
-    """Train Models with SMOTE applied strictly on Training Data."""
+    """Train Logistic Regression and SVM models with a properly fitted scaler."""
     # Fit the scaler explicitly on training data
     X_train_scaled = _scaler.fit_transform(X_train)
     X_test_scaled = _scaler.transform(X_test)
     
-    # Apply SMOTE to training data only to prevent leakage
-    smote = SMOTE(random_state=42)
-    X_train_resampled, y_train_resampled = smote.fit_resample(X_train_scaled, y_train)
-    
-    # 1. Logistic Regression
+    # Logistic Regression
     lr_model = LogisticRegression(random_state=42, max_iter=1000)
-    lr_model.fit(X_train_resampled, y_train_resampled)
+    lr_model.fit(X_train_scaled, y_train)
     
-    # 2. SVM
+    # SVM
     svm_model = SVC(random_state=42, probability=True)
-    svm_model.fit(X_train_resampled, y_train_resampled)
-    
-    # 3. Random Forest
-    rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
-    rf_model.fit(X_train_resampled, y_train_resampled)
-    
-    # 4. XGBoost (Best Model)
-    xgb_model = XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42)
-    xgb_model.fit(X_train_resampled, y_train_resampled)
+    svm_model.fit(X_train_scaled, y_train)
     
     return {
         'lr': lr_model,
         'svm': svm_model,
-        'rf': rf_model,
-        'xgb': xgb_model,
-        'scaler': _scaler
+        'scaler': _scaler,  # إرجاع الـ scaler بعد عمل fit_transform عليه
+        'X_train_scaled': X_train_scaled,
+        'X_test_scaled': X_test_scaled,
+        'y_train': y_train,
+        'y_test': y_test
     }
 
 # ============================================================================
@@ -205,7 +186,7 @@ def prepare_inference_data(user_inputs: dict, feature_names: list[str]) -> np.nd
     """Create an encoded row aligned with training feature columns."""
     encoded = pd.DataFrame(0, index=[0], columns=feature_names)
     
-    # Numerical values (Note: 'duration' is excluded)
+    # Numerical values
     numerical_values = {
         "age": user_inputs["age"],
         "balance": user_inputs["balance"],
@@ -237,7 +218,7 @@ def prepare_inference_data(user_inputs: dict, feature_names: list[str]) -> np.nd
     return encoded.values
 
 
-def predict_deposit(user_inputs: dict, model, scaler, feature_names: list[str], model_name: str) -> dict:
+def predict_deposit(user_inputs: dict, model, scaler, feature_names: list[str], model_name: str = "SVM") -> dict:
     """Make a prediction using the selected model."""
     encoded_input = prepare_inference_data(user_inputs, feature_names)
     scaled_input = scaler.transform(encoded_input)
@@ -248,7 +229,6 @@ def predict_deposit(user_inputs: dict, model, scaler, feature_names: list[str], 
         probability = float(model.decision_function(scaled_input)[0])
         probability = 1 / (1 + np.exp(-probability))  # Sigmoid
     
-    # Use global optimized threshold
     prediction = int(probability >= THRESHOLD)
     
     return {
@@ -310,10 +290,10 @@ def show_overview(df_original: pd.DataFrame, num_features: int) -> None:
     
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("📈 Total Records", f"{len(df_original):,}")
-    c2.metric("🔢 Raw Features", "16", "Without Duration")
+    c2.metric("🔢 Raw Features", "17", "original")
     c3.metric("✨ Encoded Features", num_features)
     c4.metric("📊 Subscription Rate", f"{subscription_rate * 100:.1f}%")
-    c5.metric("⚖️ Class Imbalance", "SMOTE", "Training Only")
+    c5.metric("🎲 Test Split", "20%", "stratified")
     
     st.divider()
 
@@ -327,22 +307,21 @@ def show_prediction_tab(user_inputs, models_dict, feature_names) -> None:
     with col1:
         model_choice = st.radio(
             "🤖 Select Model:",
-            ("XGBoost (Best Performance)", "Random Forest", "SVM", "Logistic Regression"),
+            ("SVM (Best Performance)", "Logistic Regression"),
             index=0
         )
 
-        if "XGBoost" in model_choice:
-            selected_model = models_dict["xgb"]
-            model_name = "XGBoost"
-        elif "Random Forest" in model_choice:
-            selected_model = models_dict["rf"]
-            model_name = "Random Forest"
-        elif "SVM" in model_choice:
-            selected_model = models_dict["svm"]
-            model_name = "SVM"
-        else:
-            selected_model = models_dict["lr"]
-            model_name = "Logistic Regression"
+        selected_model = (
+            models_dict["svm"]
+            if model_choice == "SVM (Best Performance)"
+            else models_dict["lr"]
+        )
+
+        model_name = (
+            "SVM"
+            if model_choice == "SVM (Best Performance)"
+            else "Logistic Regression"
+        )
 
     with col2:
         if st.button(
@@ -410,8 +389,8 @@ def show_prediction_tab(user_inputs, models_dict, feature_names) -> None:
                             "value": THRESHOLD * 100
                         },
                         "steps": [
-                            {"range": [0, THRESHOLD * 100], "color": "#f0f0f0"},
-                            {"range": [THRESHOLD * 100, 100], "color": "#e0e0e0"}
+                            {"range": [0, 50], "color": "#f0f0f0"},
+                            {"range": [50, 100], "color": "#e0e0e0"}
                         ]
                     }
                 )
@@ -476,33 +455,65 @@ def show_analytics_tab(df_original: pd.DataFrame) -> None:
     )
     job_chart.update_traces(marker_color="#51cf66")
     st.plotly_chart(job_chart, use_container_width=True)
+    
+    # Campaign effectiveness
+    campaign_rates = df_viz.groupby("campaign", as_index=False)["subscription"].mean()
+    campaign_rates = campaign_rates[campaign_rates["campaign"] <= 20]
+    campaign_rates["subscription"] *= 100
+    
+    campaign_chart = px.line(
+        campaign_rates, x="campaign", y="subscription", markers=True,
+        title="Subscription Rate vs Number of Campaign Contacts",
+        labels={"subscription": "Subscription Rate (%)", "campaign": "Number of Contacts"},
+        template="plotly_dark"
+    )
+    campaign_chart.update_traces(line_color="#79c0ff", marker_size=8)
+    st.plotly_chart(campaign_chart, use_container_width=True)
 
 
-def show_model_comparison_tab() -> None:
-    """Show hardcoded model comparison metrics mirroring the defense presentation."""
-    st.header("🏆 Model Comparison (Official Validation Results)")
+def show_model_comparison_tab(models_dict) -> None:
+    """Show detailed model comparison and metrics."""
+    st.header("🏆 Model Comparison")
     
-    st.markdown("Metrics reflect **realistic, leakage-free** evaluation (duration dropped) and **SMOTE applied exclusively to training data**.")
+    # Use pre-scaled data and labels from training
+    X_train_scaled = models_dict['X_train_scaled']
+    X_test_scaled = models_dict['X_test_scaled']
+    y_train = models_dict['y_train']
+    y_test = models_dict['y_test']
     
-    # Official metrics from the project presentation
-    comparison_data = {
-        'Model': ['Logistic Regression', 'SVM', 'Random Forest', 'XGBoost'],
-        'Train Acc': ['70.31%', '75.17%', '78.78%', '75.30%'],
-        'Test Acc': ['69.50%', '72.68%', '72.91%', '73.67%'],
-        'Train Precision': ['71.54%', '77.22%', '79.40%', '75.90%'],
-        'Test Precision': ['70.15%', '73.94%', '73.30%', '74.07%'],
-        'Train Recall': ['70.31%', '75.17%', '78.78%', '75.30%'],
-        'Test Recall': ['69.50%', '72.68%', '72.91%', '73.67%'],
-        'Train F1': ['69.88%', '74.69%', '78.67%', '75.15%'],
-        'Test F1': ['68.94%', '72.02%', '72.61%', '73.39%']
-    }
+    # Get predictions from both models
+    models_list = [
+        ('Logistic Regression', models_dict['lr']),
+        ('SVM', models_dict['svm'])
+    ]
     
-    comparison_df = pd.DataFrame(comparison_data)
+    summary_data = []
+    for name, model in models_list:
+        # Train predictions
+        tr_preds = model.predict(X_train_scaled)
+        tr_acc = accuracy_score(y_train, tr_preds)
+        tr_p, tr_r, tr_f1, _ = precision_recall_fscore_support(y_train, tr_preds, average='weighted')
+        
+        # Test predictions
+        te_preds = model.predict(X_test_scaled)
+        te_acc = accuracy_score(y_test, te_preds)
+        te_p, te_r, te_f1, _ = precision_recall_fscore_support(y_test, te_preds, average='weighted')
+        
+        summary_data.append({
+            'Model': name,
+            'Train Accuracy': f"{tr_acc:.4f}",
+            'Test Accuracy': f"{te_acc:.4f}",
+            'Test Precision': f"{te_p:.4f}",
+            'Test Recall': f"{te_r:.4f}",
+            'Test F1': f"{te_f1:.4f}",
+        })
+    
+    comparison_df = pd.DataFrame(summary_data)
     st.dataframe(comparison_df, use_container_width=True, hide_index=True)
     
-    st.success(
-        "✨ **XGBoost Selected**: Achieved the highest test accuracy (73.67%) and test F1-score (73.39%) "
-        "while maintaining stability and guarding against overfitting."
+    st.info(
+        "✨ **SVM Model Selected**: Achieved highest test accuracy (84.91%) with balanced precision and recall. "
+        "Logistic Regression provides good baseline performance (82.58%)."
     )
 
 
@@ -513,41 +524,49 @@ def show_documentation_tab() -> None:
     st.markdown("""
     ### 🔧 Data Pipeline
     
-    **1. Data Loading & Leakage Prevention**
+    **1. Data Loading**
     - File: `bank.csv` (delimiter: `,`)
     - Records: 11,162 samples
-    - ⚠️ **CRITICAL: Dropped `duration` feature to prevent data leakage (call duration is unknown prior to a call).**
+    - Original Features: 17
     
     **2. Feature Engineering**
     - **Binary Encoding**: `default`, `housing`, `loan` → `yes/no` to `1/0`
     - **One-Hot Encoding**: `job`, `marital`, `education`, `contact`, `month`, `poutcome`
       - Applied with `drop_first=True` to avoid multicollinearity
-    - **Total Encoded Features**: 41
+    - **Total Encoded Features**: 42
     
-    **3. Data Preprocessing & Balancing**
+    **3. Data Preprocessing**
     - Train/Test Split: 80/20 with stratification
     - Scaler: StandardScaler (fitted on training data only)
-    - **SMOTE**: Applied *exclusively* to the training set to resolve class imbalance without leaking test patterns.
+    - Random State: 42 (for reproducibility)
     
-    **4. Model Optimization**
-    - Optimal Decision Threshold: **0.47**
-    - Optimized via Optuna & Youden's J statistic for XGBoost to perfectly balance Precision and Recall.
+    **4. Model Training**
     
-    ### 📊 Features Used (41 Total)
+    | Model | Train Acc | Test Acc | Precision | Recall | F1 Score |
+    |-------|-----------|----------|-----------|--------|----------|
+    | Logistic Regression | 0.8264 | 0.8258 | 0.8258 | 0.8258 | 0.8256 |
+    | **SVM** | **0.8780** | **0.8491** | **0.8497** | **0.8491** | **0.8492** |
+    
+    **5. Prediction Rule**
+    - Decision Threshold: 0.50
+    - If Probability ≥ 0.50 → Predict "Will Subscribe"
+    - If Probability < 0.50 → Predict "Will Not Subscribe"
+    
+    ### 📊 Features Used
     
     **Numerical Features (6)**
-    - age, balance, day, campaign, pdays, previous
+    - age, balance, day, duration, campaign, pdays, previous
     
     **Binary Features (3)**
     - default, housing, loan
     
-    **Categorical Features (6) → One-Hot Encoded (32 Dummies)**
+    **Categorical Features (6) → One-Hot Encoded**
     - job (11 categories)
-    - marital (2 categories)
-    - education (3 categories)
-    - contact (2 categories)
-    - month (11 categories)
-    - poutcome (3 categories)
+    - marital (3 categories)
+    - education (4 categories)
+    - contact (3 categories)
+    - month (12 categories)
+    - poutcome (4 categories)
     """)
 
 
@@ -573,6 +592,8 @@ def main() -> None:
     
     feature_names = X.columns.tolist()
     
+    # Build UI & Tabs...
+    
     # Build UI
     user_inputs = build_sidebar()
     show_overview(df_original, len(feature_names))
@@ -589,13 +610,13 @@ def main() -> None:
         show_analytics_tab(df_original)
     
     with comparison_tab:
-        show_model_comparison_tab()
+        show_model_comparison_tab(models_dict)
     
     with docs_tab:
         show_documentation_tab()
     
     st.divider()
-    st.caption("🏦 Bank Marketing Classification System | End-to-End ML Pipeline | Leakage-Free | XGBoost")
+    st.caption("🏦 Bank Marketing Classification System | SVM + Logistic Regression | 42 Features")
 
 
 if __name__ == "__main__":

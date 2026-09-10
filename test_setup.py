@@ -1,10 +1,11 @@
 """
-Test Script for Bank Deposit Predictor
+Test Script for Bank Deposit Predictor (Final Version)
 
 Run this script to verify:
-1. All dependencies are installed
+1. All dependencies are installed (including XGBoost & Imbalanced-learn)
 2. bank.csv is readable
-3. Data preprocessing works correctly
+3. Data preprocessing works correctly (duration dropped -> 41 features)
+4. SMOTE and XGBoost model training work correctly
 """
 
 import sys
@@ -31,6 +32,8 @@ required_packages = {
     'sklearn': 'scikit-learn',
     'plotly': 'plotly',
     'streamlit': 'streamlit',
+    'xgboost': 'xgboost',
+    'imblearn': 'imbalanced-learn',
 }
 
 all_installed = True
@@ -44,7 +47,7 @@ for module_name, package_name in required_packages.items():
 
 if not all_installed:
     print("\n❌ Some packages are missing!")
-    print("   Fix: pip install -r requirements.txt")
+    print("   Fix: pip install pandas numpy scikit-learn plotly streamlit xgboost imbalanced-learn")
     sys.exit(1)
 
 # Test 3: Check bank.csv exists and load it
@@ -99,6 +102,11 @@ try:
     if df_copy[target_col].dtype == 'object':
         df_copy[target_col] = df_copy[target_col].astype(str).str.strip().str.lower().map({'no': 0, 'yes': 1})
     
+    # CRITICAL: Drop 'duration'
+    if 'duration' in df_copy.columns:
+        df_copy = df_copy.drop(columns=['duration'])
+        print("   ✅ Dropped 'duration' to prevent data leakage")
+        
     # Separate X and y
     X = df_copy.drop(columns=[target_col])
     y = df_copy[target_col]
@@ -115,20 +123,23 @@ try:
     X_encoded = pd.get_dummies(X, columns=existing_cats, drop_first=True, dtype=int)
     
     print(f"   ✅ Preprocessing successful")
-    print(f"   ✅ Features after encoding: {X_encoded.shape[1]}")
+    print(f"   ✅ Features after encoding: {X_encoded.shape[1]} (Expected: 41)")
     print(f"   ✅ Training samples: {X_encoded.shape[0]}")
     
 except Exception as e:
     print(f"   ❌ Preprocessing error: {e}")
     sys.exit(1)
 
-# Test 7: Test model training
-print("\n7️⃣ Testing model training...")
+# Test 7: Test model training & SMOTE
+print("\n7️⃣ Testing model training & SMOTE...")
 try:
     from sklearn.model_selection import train_test_split
     from sklearn.preprocessing import StandardScaler
+    from imblearn.over_sampling import SMOTE
     from sklearn.linear_model import LogisticRegression
     from sklearn.svm import SVC
+    from sklearn.ensemble import RandomForestClassifier
+    from xgboost import XGBClassifier
     
     # Split data
     X_train, X_test, y_train, y_test = train_test_split(
@@ -140,18 +151,30 @@ try:
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
+    # Apply SMOTE
+    smote = SMOTE(random_state=42)
+    X_train_resampled, y_train_resampled = smote.fit_resample(X_train_scaled, y_train)
+    print("   ✅ SMOTE applied successfully to training data")
+    
     # Train Logistic Regression
     lr = LogisticRegression(random_state=42, max_iter=1000)
-    lr.fit(X_train_scaled, y_train)
-    lr_acc = lr.score(X_test_scaled, y_test)
+    lr.fit(X_train_resampled, y_train_resampled)
     
     # Train SVM
     svm = SVC(random_state=42, probability=True)
-    svm.fit(X_train_scaled, y_train)
-    svm_acc = svm.score(X_test_scaled, y_test)
+    svm.fit(X_train_resampled, y_train_resampled)
     
-    print(f"   ✅ Logistic Regression trained (accuracy: {lr_acc:.2%})")
-    print(f"   ✅ SVM trained (accuracy: {svm_acc:.2%})")
+    # Train Random Forest
+    rf = RandomForestClassifier(n_estimators=10, random_state=42) # n_estimators=10 for faster test
+    rf.fit(X_train_resampled, y_train_resampled)
+    
+    # Train XGBoost
+    xgb = XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42)
+    xgb.fit(X_train_resampled, y_train_resampled)
+    xgb_acc = xgb.score(X_test_scaled, y_test)
+    
+    print(f"   ✅ All 4 Models trained successfully")
+    print(f"   ✅ XGBoost test accuracy: {xgb_acc:.2%}")
     
 except Exception as e:
     print(f"   ❌ Model training error: {e}")
